@@ -1,5 +1,8 @@
-import { Injectable } from '@nestjs/common';
-import jwt from 'jsonwebtoken';
+import { Injectable, HttpException, HttpStatus } from '@nestjs/common';
+
+import { ConfigService } from '@nestjs/config';
+
+import { JwtService } from '@nestjs/jwt';
 import bcrypt from 'bcrypt';
 
 import { PrismaService } from 'src/prisma/prisma.service';
@@ -7,17 +10,23 @@ import { CreateUserDto } from './dto/create-user.dto';
 
 @Injectable()
 export class AuthService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly configService: ConfigService,
+    private jwtService: JwtService,
+  ) {}
 
   async register(createUserDro: CreateUserDto): Promise<void> {
     const { email, firstname, lastname, username, password } = createUserDro;
 
-    const existingUser = await this.prisma.user.findUnique({
-      where: { username },
+    const existingUser = await this.prisma.user.findFirst({
+      where: {
+        OR: [{ email }, { username }],
+      },
     });
 
     if (existingUser) {
-      throw new Error('User already exists');
+      throw new HttpException('User already exists', HttpStatus.CONFLICT);
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -33,27 +42,36 @@ export class AuthService {
     });
   }
 
-  async login(username: string, password: string): Promise<string> {
-    const user = await this.prisma.user.findUnique({
-      where: { username },
+  async login(
+    email: string,
+    username: string,
+    password: string,
+  ): Promise<string> {
+    const user = await this.prisma.user.findFirstOrThrow({
+      where: {
+        OR: [{ email }, { username }],
+      },
     });
 
-    if (!user) {
-      throw new Error('Invalid credentials');
-    }
-
-    const passwordValid = await bcrypt.compare(user.password, password);
+    const passwordValid = await bcrypt.compare(password, user.password);
 
     if (!passwordValid) {
-      throw new Error('Invalid credentials');
+      throw new HttpException('Invalid credentials', HttpStatus.UNAUTHORIZED);
     }
 
-    const payload = { username: user.username, userId: user.id };
-
-    const secret = '';
-    const options: jwt.SignOptions = { expiresIn: '1h' };
-    const jwtToken = await this.signJwt(payload, secret, options);
-    return jwtToken;
+    const secret = this.configService.get<string>('JWT_SECRET');
+    if (!secret) {
+      throw new Error('JWT_SECRET is not set in environment variables');
+    }
+    const payload = {
+      userId: user.id,
+      email: user.email,
+      username: user.username,
+    };
+    return this.jwtService.sign(payload, {
+      secret,
+      expiresIn: '1h',
+    });
   }
 
   async verifyJwt(accessToken: string): Promise<boolean> {
@@ -61,20 +79,27 @@ export class AuthService {
       throw new Error('Invalid access token');
     }
     try {
-      // Verify the JWT token
-      const decoded = jwt.verify(accessToken, 'your-secret-key'); // Replace with your secret key
-      return !!decoded; // Return true if the token is valid
+      const secret = this.configService.get<string>('JWT_SECRET');
+      if (!secret) {
+        throw new Error('JWT_SECRET is not set in environment variables');
+      }
+      const decoded = this.jwtService.verify(accessToken, {
+        secret,
+      });
+      return !!decoded;
     } catch (error) {
       console.error('JWT verification failed:', error);
-      return false; // Return false if the token is invalid
+      return false;
     }
   }
 
-  async signJwt(
-    payload: Record<string, any>,
-    secret: string,
-    options?: jwt.SignOptions,
-  ): Promise<string> {
-    return jwt.sign(payload, secret, options);
+  async signJwt(payload: Record<string, any>, secret: string): Promise<string> {
+    if (!secret) {
+      throw new Error('JWT secret is not provided');
+    }
+    return this.jwtService.sign(payload, {
+      secret,
+      expiresIn: '1h',
+    });
   }
 }

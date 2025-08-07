@@ -6,9 +6,11 @@ import {
   Param,
   Put,
   Delete,
+  UseGuards,
 } from '@nestjs/common';
 import { BooksService } from './books.service';
 import { Book as BookModel } from '@prisma/client';
+import { Public } from 'src/auth/public.decorator';
 
 @Controller('books')
 export class BooksController {
@@ -21,11 +23,13 @@ export class BooksController {
     return this.booksService.createBook(body);
   }
 
+  @Public()
   @Get()
   async getBooks(): Promise<BookModel[]> {
     return this.booksService.getBooks();
   }
 
+  @Public()
   @Get(':id')
   async getBookById(@Param('id') id: number): Promise<BookModel | null> {
     return this.booksService.getBookById(+id);
